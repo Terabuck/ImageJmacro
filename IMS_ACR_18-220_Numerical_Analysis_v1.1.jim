@@ -1,0 +1,1665 @@
+//////////////////////////////////////////////////////////////////////////////
+//ImageJ Macro for the ACR Mammography Accreditation Phantom 18-220 Analysis//
+//      Macro written by Dott. Turco Alessandro April 2014                  //
+//////////////////////////////////////////////////////////////////////////////
+
+macro_version = 1.1;
+path = "C:\\Documents and Settings\\user\\Desktop\\test";
+outpath = "D:\\";
+ImageWidth = 2816;
+ImageHeight = 3584;
+extname =".dcm"
+dbg_val = 0;
+
+myDir = outpath +"ACR_Test_Result"+File.separator;
+File.makeDirectory(myDir);
+if (!File.exists(myDir)) exit("Unable to create directory");
+
+Dialog.create("\tACR Test - GetPaths\t");
+Dialog.addString("Input Path:", path, 100);
+Dialog.addString("Image type:", extname, 100);
+Dialog.addNumber("ImageWidth:\n (Only for raw images)", ImageWidth,0,4,"");
+Dialog.addNumber("ImageHeight:\n (Only for raw images)", ImageHeight,0,4,"");
+Dialog.addNumber("Debug:", dbg_val,0,4,"");
+Dialog.show();
+
+path = Dialog.getString();
+extname = Dialog.getString();
+ImageWidth = Dialog.getNumber();
+ImageHeight = Dialog.getNumber();
+dbg_val = Dialog.getNumber();
+
+if(!endsWith(path,"\\")) path = path+"\\";
+
+list = getFileList(path);
+run("Set Measurements...", "area mean standard min max center fit shape redirect=None decimal=2");
+
+
+for (k=0; k<list.length; k++) //Main loop performed for all the images in the "input path" directory
+{
+	
+	if(extname == ".dcm") 
+	{
+		filename = list[k];
+		open(path+filename);
+		//Getting DICOM info
+		Presentation_Intent_Type = getTag("0008,0068");
+		angle = getNumericTag("1271,1078");
+		Exp_mode = getTag("0018,7060");
+		Image_Presentation_Type = getTag("0008,0068");
+		mm = getNumericTag("0018,11A0");
+		Anode = getTag("0018,1191");
+		Filter = getTag("0018,7050");
+		kV = getNumericTag("0018,0060");
+		uAs = getNumericTag("0018,1153");
+		mAs = getNumericTag("0018,1152");
+		mAs_tot = getNumericTag("0018,9332");
+		exp_time = getNumericTag("0018,1150");
+		mA = getNumericTag("0018,1151");
+		Pixel_Spacing = getNumericTag("0018,1164");
+		MGD = getNumericTag("0040,0316");
+		ESAK = getNumericTag("0040,8302");
+		HVL = getNumericTag("0040,0314");
+		SoftwareVersion = getTag("0018,1020");
+		GiottoSerialNumber = getNumericTag("0018,1000");
+		MachineModel = getTag("0008,1090");
+		DetectorID = getTag("0018,700A");
+		LastCalibDate = getNumericTag("0018,700C");
+		BitStored = getNumericTag("0028,0101");
+		StudyDescription = getTag("0008,1030");
+		SOP_class_UID = getTag("0008,0016");
+		Projection = getNumericTag("1271,1082");
+		Grid = getTag("0018,1166");
+		SID = getNumericTag("0018,1110");
+		SOD = getNumericTag("1271,1055");
+		SAD = getNumericTag("1271,1070");
+		FSP_X = getNumericTag("1271,1075");
+		FSP_Y = getNumericTag("1271,1074");
+		Distance_Source_to_patient = getNumericTag("0018,1111");
+		ImageDate = getNumericTag("0008,0023");
+		ImageTime = getNumericTag("0008,0032");
+		nWidth = getWidth(); //width of the images
+		nHeight = getHeight(); //height of the images
+		nbit = bitDepth(); //bit of images
+		getPixelSize(unit, pw, ph, pd); //pixel spacing in x, y and z direction
+		pixelSpacing = pw;
+	}
+	if ((extname == ".raw") || (extname == ".dat"))
+	{
+		run("Raw...", "open= path+filename image=[16-bit Unsigned] width=ImageWidth height=ImageHeight offset=0 number=1 gap=0 white little-endian");
+		nWidth = ImageWidth;
+		nHeight = ImageHeight;
+		filename = getInfo("image.filename");
+		
+	}
+	
+	if ((extname == ".dcm") && (Image_Presentation_Type == " FOR PRESENTATION")) run("Invert");
+	/* ImageType Legend: 
+	ImageType = 0 -->  UNKNOW;
+	ImageType = 1 -->  MAMMO;
+	ImageType = 2 -->  PROJECTION;
+	ImageType = 3 -->  TOMO RECO;
+	*/ 
+	if(SOP_class_UID == " 1.2.840.10008.5.1.4.1.1.13.1.3")
+	{
+		ImageType =3;//TOMO RECO
+	}
+	else if(SOP_class_UID == " 1.2.840.10008.5.1.4.1.1.1.2.1 ")
+	{
+		if (Projection == 1)
+		{
+			ImageType = 2;//PROJECTION
+		}
+		else
+		{
+			ImageType = 1;//MAMMO
+		}
+	}
+	else
+	{
+		ImageType = 0;//UNKNOW
+	}
+	
+	//FOCUSED SLICE DETECTION
+	nThick = nSlices;
+	Stat_Slice = newArray(nThick);
+	Slice_index = newArray(nThick);
+	if ((extname == ".dcm") && (ImageType == 3)) 
+	{
+		for (s=1; s<=nThick; s++)
+		{
+			setSlice(s);
+			makeRectangle(200, 200, nWidth-400, nHeight-400);
+			
+			getRawStatistics(area, mean, min, max, std, histogram);
+			Stat_Slice[s-1]= std;
+			Slice_index[s-1] = s;
+		}
+		roiManager("Add");
+		roiManager("Select", roiManager("count")-1);
+		roiManager("Rename", "ROI for focused slice detection");
+		//Research of the maximum for std. dev.
+		max_stat_slice = 0;
+		max_slice_index = 0;
+		for (i=0; i<Stat_Slice.length; i++)
+		{
+			if(Stat_Slice[i]>max_stat_slice)
+			{
+				max_stat_slice = Stat_Slice[i];
+				max_slice_index = i;
+			}
+		}
+		selectWindow(filename);
+		focused_slice = max_slice_index+1;
+		setSlice(focused_slice); //Focused Slice
+	}
+	//if ((extname == ".dcm") && (ImageType == 3)) run("Invert");
+	
+	InitialROIdim = 1012;
+	makeRectangle(1550, 1300, InitialROIdim, InitialROIdim);
+	run("Set... ", "zoom=50");
+	run("Enhance Contrast", "saturated=0.35");
+	
+	myImageID = getImageID();                           //remember the image
+	setTool(0);                                         //Rectangle tool 
+	beep();                                             //alert the user
+	waitForUser("Select the wax insert");				//wait for user action
+	selectImage(myImageID);	                           //make sure we have the same foreground image again
+
+	if (selectionType() != 0)                           //make sure we have got a rectangular selection
+	exit("Sorry, no rectangle selected");
+	
+	getSelectionCoordinates(xCoordinates, yCoordinates);
+	
+	X_Top_Left = xCoordinates[0];
+	Y_Top_Left = yCoordinates[0];
+	
+	X_Top_Right = xCoordinates[1];
+	Y_Top_Right = yCoordinates[1];
+	
+	X_Bottom_Right = xCoordinates[2];
+	Y_Bottom_Right = yCoordinates[2];
+	
+	X_Bottom_Left = xCoordinates[3];
+	Y_Bottom_Left = yCoordinates[3];
+	
+	ROI_wax_X = xCoordinates[1]-xCoordinates[0];
+	ROI_wax_Y = yCoordinates[2]-yCoordinates[1];
+	
+	real_dim = 78; //mm
+	
+	X_factor = real_dim/ROI_wax_X;
+	Y_factor = real_dim/ROI_wax_Y;
+	
+	if ((extname == ".raw") || (extname == ".dat")) pixelSpacing = 0.085;
+	
+	makeRectangle(X_Top_Left,Y_Top_Left,ROI_wax_X,ROI_wax_Y);
+	run("Copy");
+	newImage("Wax_insert", "16-bit White", ROI_wax_X, ROI_wax_Y, 1);
+	run("Enhance Contrast", "saturated=0.35");
+	run("Paste");
+	makeRectangle(20,20,ROI_wax_X-20,ROI_wax_Y-20);
+	run("Enhance Contrast", "saturated=0.35");
+	selectWindow("Wax_insert");
+	run("Input/Output...", "jpeg=100 gif=-1 file=.txt use_file save copy_row save_column save_row");
+	
+	if(extname == ".dcm") saveAs("Jpeg", myDir+"Wax_Insert"+kV+"kV"+Filter+mAs+"mAs"+ImageDate+ImageTime);
+	if ((extname == ".raw") || (extname == ".dat")) saveAs("Jpeg", myDir+"Wax_Insert"+filename);
+	selectWindow("Wax_insert");
+	run("Close");
+	
+	
+
+	//if(dbg_val ==1) waitForUser("X_Top_Left:\t "+d2s(X_Top_Left*pixelSpacing,2)+"Y_Top_Left:\t "+d2s(Y_Top_Left*pixelSpacing,2)+"\nX_factor"+X_factor+"Y_factor"+Y_factor);
+	
+
+	//////////////////////////////////////////////////////////////////////
+	//                       FIRST FIBRE								//
+	//////////////////////////////////////////////////////////////////////
+	
+	Fibre_number = 1;
+	ROIdim = 8.7/X_factor;
+	X_Offset = 5.4/X_factor; 
+	Y_Offset = 5.8/Y_factor;
+	
+	X_Start = X_Top_Left + X_Offset;
+	Y_Start = Y_Top_Left + Y_Offset;
+	fibre_angle = 45; //degree of the fibre
+	fibre_line_width = 7/X_factor;
+	sigma_min = 2.5;
+	sigma_max = 8.0;
+	ROI_Noise_width = 4/X_factor; //mm
+	
+	First_Fibre_Result = fibre_profile_analysis(Fibre_number,X_Start,Y_Start,ROIdim,fibre_line_width,sigma_min,sigma_max,fibre_angle,ROI_Noise_width);
+
+	//////////////////////////////////////////////////////////////////////
+	//                       SECOND FIBRE								//
+	//////////////////////////////////////////////////////////////////////
+	
+	Fibre_number = 2;
+	ROIdim = 8.2/X_factor;
+	X_Offset = 7.5/X_factor; 
+	Y_Offset = 26.7/Y_factor;
+	
+	X_Start = X_Top_Left + X_Offset;
+	Y_Start = Y_Top_Left + Y_Offset;
+	fibre_angle = -45; //degree of the fibre
+	fibre_line_width = 6.0/X_factor;
+	sigma_min = 1.5;
+	sigma_max = 6;
+	ROI_Noise_width = 3.2/X_factor; //mm
+	
+	Second_Fibre_Result = fibre_profile_analysis(Fibre_number,X_Start,Y_Start,ROIdim,fibre_line_width,sigma_min,sigma_max,fibre_angle,ROI_Noise_width);
+	
+	//////////////////////////////////////////////////////////////////////
+	//                       THIRD FIBRE								//
+	//////////////////////////////////////////////////////////////////////
+	
+	Fibre_number = 3;
+	ROIdim = 8.6/X_factor;
+	X_Offset = 7.9/X_factor; 
+	Y_Offset = 45.2/Y_factor;
+	
+	X_Start = X_Top_Left + X_Offset;
+	Y_Start = Y_Top_Left + Y_Offset;
+	fibre_angle = 45; //degree of the fibre
+	fibre_line_width = 6.0/X_factor;
+	sigma_min = 1.5;
+	sigma_max = 4.5;
+	ROI_Noise_width = 3.2/X_factor; //mm
+	
+	Third_Fibre_Result = fibre_profile_analysis(Fibre_number,X_Start,Y_Start,ROIdim,fibre_line_width,sigma_min,sigma_max,fibre_angle,ROI_Noise_width);
+
+	//////////////////////////////////////////////////////////////////////
+	//                       FOURTH FIBRE								//
+	//////////////////////////////////////////////////////////////////////
+	
+	Fibre_number = 4;
+	ROIdim = 7.5/X_factor;
+	X_Offset = 8.1/X_factor; 
+	Y_Offset = 66.2/Y_factor;
+	
+	X_Start = X_Top_Left + X_Offset;
+	Y_Start = Y_Top_Left + Y_Offset;
+	fibre_angle = -45; //degree of the fibre
+	fibre_line_width = 5.3/X_factor;
+	sigma_min = 1.0;
+	sigma_max = 4.5;
+	ROI_Noise_width = 2.8/X_factor; //mm
+	
+	Fourth_Fibre_Result = fibre_profile_analysis(Fibre_number,X_Start,Y_Start,ROIdim,fibre_line_width,sigma_min,sigma_max,fibre_angle,ROI_Noise_width);	
+
+	//////////////////////////////////////////////////////////////////////
+	//                       FIFTH FIBRE								//
+	//////////////////////////////////////////////////////////////////////
+	
+	Fibre_number = 5;
+	ROIdim = 7.5/X_factor;
+	X_Offset = 26.8/X_factor; 
+	Y_Offset = 5.5/Y_factor;
+	
+	X_Start = X_Top_Left + X_Offset;
+	Y_Start = Y_Top_Left + Y_Offset;
+	fibre_angle = 45; //degree of the fibre
+	fibre_line_width = 5.5/X_factor;
+	sigma_min = 1;
+	sigma_max = 4;
+	ROI_Noise_width = 2.8/X_factor; //mm
+	
+	Fifth_Fibre_Result = fibre_profile_analysis(Fibre_number,X_Start,Y_Start,ROIdim,fibre_line_width,sigma_min,sigma_max,fibre_angle,ROI_Noise_width);
+
+	//////////////////////////////////////////////////////////////////////
+	//                       SIXTH FIBRE								//
+	//////////////////////////////////////////////////////////////////////
+	
+	Fibre_number = 6;
+	ROIdim = 7.5/X_factor;
+	X_Offset = 27.6/X_factor; 
+	Y_Offset = 25.5/Y_factor;
+	
+	X_Start = X_Top_Left + X_Offset;
+	Y_Start = Y_Top_Left + Y_Offset;
+	fibre_angle = -45; //degree of the fibre
+	fibre_line_width = 5.5/X_factor;
+	sigma_min = 1;
+	sigma_max = 4;
+	ROI_Noise_width = 2.8/X_factor; //mm
+	
+	Sixth_Fibre_Result = fibre_profile_analysis(Fibre_number,X_Start,Y_Start,ROIdim,fibre_line_width,sigma_min,sigma_max,fibre_angle,ROI_Noise_width);
+	
+	//////////////////////////////////////////////////////////////////////
+	//                       FIRST MASS									//
+	//////////////////////////////////////////////////////////////////////
+	
+	Mass_number = 1;
+	ROIdim = 11.70/X_factor;
+	X_Offset = 34.00/X_factor;
+	Y_Offset = 15.70/Y_factor;
+	X_Start = X_Bottom_Right - X_Offset;
+	Y_Start = Y_Bottom_Right - Y_Offset;
+	l_mass = 100; //profile length
+	
+	First_Mass_Result = mass_analysis(Mass_number,X_Start,Y_Start,ROIdim,l_mass);
+	
+	//////////////////////////////////////////////////////////////////////
+	//                       SECOND MASS								//
+	//////////////////////////////////////////////////////////////////////
+	
+	Mass_number = 2;
+	ROIdim = 10.00/X_factor;
+	X_Offset = 14.12/X_factor;
+	Y_Offset = 3.40/Y_factor;
+	X_Start = X_Top_Right - X_Offset;
+	Y_Start = Y_Top_Right + Y_Offset;
+	l_mass = 75; //profile length
+	
+	Second_Mass_Result = mass_analysis(Mass_number,X_Start,Y_Start,ROIdim,l_mass);
+
+	//////////////////////////////////////////////////////////////////////
+	//                       THIRD MASS									//
+	//////////////////////////////////////////////////////////////////////
+	
+	Mass_number = 3;
+	ROIdim = 9.50/X_factor;
+	X_Offset = 14.00/X_factor;
+	Y_Offset = 23.85/Y_factor;
+	X_Start = X_Top_Right - X_Offset;
+	Y_Start = Y_Top_Right + Y_Offset;
+	l_mass = 75; //profile length
+	
+	Third_Mass_Result = mass_analysis(Mass_number,X_Start,Y_Start,ROIdim,l_mass);
+
+	//////////////////////////////////////////////////////////////////////
+	//                       FOURTH MASS								//
+	//////////////////////////////////////////////////////////////////////
+	
+	Mass_number = 4;
+	ROIdim = 8.20/X_factor;
+	X_Offset = 12.80/X_factor;
+	Y_Offset = 33.40/Y_factor;
+	X_Start = X_Bottom_Right - X_Offset;
+	Y_Start = Y_Bottom_Right - Y_Offset;
+	l_mass = 70; //profile length
+	
+	Fourth_Mass_Result = mass_analysis(Mass_number,X_Start,Y_Start,ROIdim,l_mass);
+
+	//////////////////////////////////////////////////////////////////////
+	//                       FIFTH MASS									//
+	//////////////////////////////////////////////////////////////////////
+	
+	Mass_number = 5;
+	ROIdim = 7.10/X_factor;
+	X_Offset = 12.35/X_factor;
+	Y_Offset = 12.75/Y_factor;
+	X_Start = X_Bottom_Right - X_Offset;
+	Y_Start = Y_Bottom_Right - Y_Offset;
+	l_mass = 60; //profile length
+	
+	Fifth_Mass_Result = mass_analysis(Mass_number,X_Start,Y_Start,ROIdim,l_mass);
+
+	//////////////////////////////////////////////////////////////////////
+	//                       FIRST SPECKS GROUPS						//
+	//////////////////////////////////////////////////////////////////////
+	
+	Micro_number = 1.1;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 28.00/X_factor;
+	Y_Offset = 42.2/Y_factor;
+	X_Start = X_Top_Left + X_Offset;
+	Y_Start = Y_Top_Left + Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 5;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_1_1_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 1.2;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 35/X_factor;
+	Y_Offset = 44.7/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 5;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_1_2_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+
+	Micro_number = 1.3;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 35.1/X_factor;
+	Y_Offset = 51/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 1;
+	sigma_max = 3;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_1_3_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 1.4;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 27.8/X_factor;
+	Y_Offset = 53.1/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 1;
+	sigma_max = 3;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_1_4_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 1.5;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 23.72/X_factor;
+	Y_Offset = 48.0/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 1;
+	sigma_max = 3;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_1_5_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 1.6;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 30.05/X_factor;
+	Y_Offset = 47.5/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 5;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_1_6_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);	
+	
+	Total_Micro_1_Score = Micro_1_1_Result[9] + Micro_1_2_Result[9] + Micro_1_3_Result[9] + Micro_1_4_Result[9] + Micro_1_5_Result[9] + Micro_1_6_Result[9];
+	Total_Micro_1_Ground = (Micro_1_1_Result[1] + Micro_1_2_Result[1] + Micro_1_3_Result[1] + Micro_1_4_Result[1] + Micro_1_5_Result[1] + Micro_1_6_Result[1])/Total_Micro_1_Score;
+	Total_Micro_1_Signal = (Micro_1_1_Result[2] + Micro_1_2_Result[2] + Micro_1_3_Result[2] + Micro_1_4_Result[2] + Micro_1_5_Result[2] + Micro_1_6_Result[2])/Total_Micro_1_Score;
+	Total_Micro_1_Sigma = (Micro_1_1_Result[3] + Micro_1_2_Result[3] + Micro_1_3_Result[3] + Micro_1_4_Result[3] + Micro_1_5_Result[3] + Micro_1_6_Result[3])/Total_Micro_1_Score;
+	Total_Micro_1_Contrast = (Micro_1_1_Result[4] + Micro_1_2_Result[4] + Micro_1_3_Result[4] + Micro_1_4_Result[4] + Micro_1_5_Result[4] + Micro_1_6_Result[4])/Total_Micro_1_Score;
+	Total_Micro_1_Delta = (Micro_1_1_Result[5] + Micro_1_2_Result[5] + Micro_1_3_Result[5] + Micro_1_4_Result[5] + Micro_1_5_Result[5] + Micro_1_6_Result[5])/Total_Micro_1_Score;
+	Total_Micro_1_Noise = (Micro_1_1_Result[6] + Micro_1_2_Result[6] + Micro_1_3_Result[6] + Micro_1_4_Result[6] + Micro_1_5_Result[6] + Micro_1_6_Result[6])/Total_Micro_1_Score;
+	Total_Micro_1_SNR = (Micro_1_1_Result[7] + Micro_1_2_Result[7] + Micro_1_3_Result[7] + Micro_1_4_Result[7] + Micro_1_5_Result[7] + Micro_1_6_Result[7])/Total_Micro_1_Score;
+	Total_Micro_1_CNR = (Micro_1_1_Result[8] + Micro_1_2_Result[8] + Micro_1_3_Result[8] + Micro_1_4_Result[8] + Micro_1_5_Result[8] + Micro_1_6_Result[8])/Total_Micro_1_Score;
+	
+
+	//////////////////////////////////////////////////////////////////////
+	//                       SECOND SPECKS GROUPS						//
+	//////////////////////////////////////////////////////////////////////
+	
+	Micro_number = 2.1;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 27.35/X_factor;
+	Y_Offset = 62.0/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 1;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_2_1_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 2.2;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 34.5/X_factor;
+	Y_Offset = 64.0/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 1;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_2_2_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+
+	Micro_number = 2.3;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 35.00/X_factor;
+	Y_Offset = 70.00/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 1;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_2_3_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 2.4;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 27.8/X_factor;
+	Y_Offset = 72.5/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 1;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_2_4_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 2.5;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 23.45/X_factor;
+	Y_Offset = 66.80/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 1;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_2_5_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 2.6;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 29.20/X_factor;
+	Y_Offset = 67.60/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 1;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 3; //profile width
+	
+	Micro_2_6_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);	
+	
+	Total_Micro_2_Score = Micro_2_1_Result[9] + Micro_2_2_Result[9] + Micro_2_3_Result[9] + Micro_2_4_Result[9] + Micro_2_5_Result[9] + Micro_2_6_Result[9];
+	Total_Micro_2_Ground = (Micro_2_1_Result[1] + Micro_2_2_Result[1] + Micro_2_3_Result[1] + Micro_2_4_Result[1] + Micro_2_5_Result[1] + Micro_2_6_Result[1])/Total_Micro_2_Score;
+	Total_Micro_2_Signal = (Micro_2_1_Result[2] + Micro_2_2_Result[2] + Micro_2_3_Result[2] + Micro_2_4_Result[2] + Micro_2_5_Result[2] + Micro_2_6_Result[2])/Total_Micro_2_Score;
+	Total_Micro_2_Sigma = (Micro_2_1_Result[3] + Micro_2_2_Result[3] + Micro_2_3_Result[3] + Micro_2_4_Result[3] + Micro_2_5_Result[3] + Micro_2_6_Result[3])/Total_Micro_2_Score;
+	Total_Micro_2_Contrast = (Micro_2_1_Result[4] + Micro_2_2_Result[4] + Micro_2_3_Result[4] + Micro_2_4_Result[4] + Micro_2_5_Result[4] + Micro_2_6_Result[4])/Total_Micro_2_Score;
+	Total_Micro_2_Delta = (Micro_2_1_Result[5] + Micro_2_2_Result[5] + Micro_2_3_Result[5] + Micro_2_4_Result[5] + Micro_2_5_Result[5] + Micro_2_6_Result[5])/Total_Micro_2_Score;
+	Total_Micro_2_Noise = (Micro_2_1_Result[6] + Micro_2_2_Result[6] + Micro_2_3_Result[6] + Micro_2_4_Result[6] + Micro_2_5_Result[6] + Micro_2_6_Result[6])/Total_Micro_2_Score;
+	Total_Micro_2_SNR = (Micro_2_1_Result[7] + Micro_2_2_Result[7] + Micro_2_3_Result[7] + Micro_2_4_Result[7] + Micro_2_5_Result[7] + Micro_2_6_Result[7])/Total_Micro_2_Score;
+	Total_Micro_2_CNR = (Micro_2_1_Result[8] + Micro_2_2_Result[8] + Micro_2_3_Result[8] + Micro_2_4_Result[8] + Micro_2_5_Result[8] + Micro_2_6_Result[8])/Total_Micro_2_Score;
+	
+
+	//////////////////////////////////////////////////////////////////////
+	//                       THIRD SPECKS GROUPS						//
+	//////////////////////////////////////////////////////////////////////
+	
+	Micro_number = 3.1;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 46.5/X_factor;
+	Y_Offset = 3.3/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 3.5;
+	l_micro = 30; //profile length
+	width_micro_profile = 2; //profile width
+	
+	Micro_3_1_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 3.2;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 53.25/X_factor;
+	Y_Offset = 5.67/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 3;
+	l_micro = 30; //profile length
+	width_micro_profile = 2; //profile width
+	
+	Micro_3_2_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+
+	Micro_number = 3.3;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 53.5/X_factor;
+	Y_Offset = 12.00/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 2; //profile width
+	
+	Micro_3_3_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 3.4;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 46.35/X_factor;
+	Y_Offset = 13.15/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 2; //profile width
+	
+	Micro_3_4_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 3.5;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 43.10/X_factor;
+	Y_Offset = 8.20/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 2; //profile width
+	
+	Micro_3_5_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 3.6;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 48.18/X_factor;
+	Y_Offset = 8.62/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 2; //profile width
+	
+	Micro_3_6_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);	
+	Total_Micro_3_Score = Micro_3_1_Result[9] + Micro_3_2_Result[9] + Micro_3_3_Result[9] + Micro_3_4_Result[9] + Micro_3_5_Result[9] + Micro_3_6_Result[9];
+	Total_Micro_3_Ground = (Micro_3_1_Result[1] + Micro_3_2_Result[1] + Micro_3_3_Result[1] + Micro_3_4_Result[1] + Micro_3_5_Result[1] + Micro_3_6_Result[1])/Total_Micro_3_Score;
+	Total_Micro_3_Signal = (Micro_3_1_Result[2] + Micro_3_2_Result[2] + Micro_3_3_Result[2] + Micro_3_4_Result[2] + Micro_3_5_Result[2] + Micro_3_6_Result[2])/Total_Micro_3_Score;
+	Total_Micro_3_Sigma = (Micro_3_1_Result[3] + Micro_3_2_Result[3] + Micro_3_3_Result[3] + Micro_3_4_Result[3] + Micro_3_5_Result[3] + Micro_3_6_Result[3])/Total_Micro_3_Score;
+	Total_Micro_3_Contrast = (Micro_3_1_Result[4] + Micro_3_2_Result[4] + Micro_3_3_Result[4] + Micro_3_4_Result[4] + Micro_3_5_Result[4] + Micro_3_6_Result[4])/Total_Micro_3_Score;
+	Total_Micro_3_Delta = (Micro_3_1_Result[5] + Micro_3_2_Result[5] + Micro_3_3_Result[5] + Micro_3_4_Result[5] + Micro_3_5_Result[5] + Micro_3_6_Result[5])/Total_Micro_3_Score;
+	Total_Micro_3_Noise = (Micro_3_1_Result[6] + Micro_3_2_Result[6] + Micro_3_3_Result[6] + Micro_3_4_Result[6] + Micro_3_5_Result[6] + Micro_3_6_Result[6])/Total_Micro_3_Score;
+	Total_Micro_3_SNR = (Micro_3_1_Result[7] + Micro_3_2_Result[7] + Micro_3_3_Result[7] + Micro_3_4_Result[7] + Micro_3_5_Result[7] + Micro_3_6_Result[7])/Total_Micro_3_Score;
+	Total_Micro_3_CNR = (Micro_3_1_Result[8] + Micro_3_2_Result[8] + Micro_3_3_Result[8] + Micro_3_4_Result[8] + Micro_3_5_Result[8] + Micro_3_6_Result[8])/Total_Micro_3_Score;
+	
+
+	//////////////////////////////////////////////////////////////////////
+	//                       FOURTH SPECKS GROUPS						//
+	//////////////////////////////////////////////////////////////////////
+	
+	Micro_number = 4.1;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 46.8/X_factor;
+	Y_Offset = 23.2/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 1; //profile width
+	
+	Micro_4_1_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 4.2;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 53.8/X_factor;
+	Y_Offset = 26.0/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 1; //profile width
+	
+	Micro_4_2_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+
+	Micro_number = 4.3;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 53.2/X_factor;
+	Y_Offset = 31.8/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 1; //profile width
+	
+	Micro_4_3_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 4.4;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 46.5/X_factor;
+	Y_Offset = 33.3/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 1; //profile width
+	
+	Micro_4_4_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 4.5;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 43.4/X_factor;
+	Y_Offset = 28.0/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 1; //profile width
+	
+	Micro_4_5_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);
+
+	Micro_number = 4.6;
+	ROIdim = 2.3/X_factor;
+	X_Offset = 49.18/X_factor;
+	Y_Offset = 28.03/Y_factor;
+	X_Start = X_Top_Left+X_Offset;
+	Y_Start = Y_Top_Left+Y_Offset;
+	sigma_min = 0.5;
+	sigma_max = 2;
+	l_micro = 30; //profile length
+	width_micro_profile = 1; //profile width
+	
+	Micro_4_6_Result = micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile);	
+	
+	Total_Micro_4_Score = Micro_4_1_Result[9] + Micro_4_2_Result[9] + Micro_4_3_Result[9] + Micro_4_4_Result[9] + Micro_4_5_Result[9] + Micro_4_6_Result[9];
+	Total_Micro_4_Ground = (Micro_4_1_Result[1] + Micro_4_2_Result[1] + Micro_4_3_Result[1] + Micro_4_4_Result[1] + Micro_4_5_Result[1] + Micro_4_6_Result[1])/Total_Micro_4_Score;
+	Total_Micro_4_Signal = (Micro_4_1_Result[2] + Micro_4_2_Result[2] + Micro_4_3_Result[2] + Micro_4_4_Result[2] + Micro_4_5_Result[2] + Micro_4_6_Result[2])/Total_Micro_4_Score;
+	Total_Micro_4_Sigma = (Micro_4_1_Result[3] + Micro_4_2_Result[3] + Micro_4_3_Result[3] + Micro_4_4_Result[3] + Micro_4_5_Result[3] + Micro_4_6_Result[3])/Total_Micro_4_Score;
+	Total_Micro_4_Contrast = (Micro_4_1_Result[4] + Micro_4_2_Result[4] + Micro_4_3_Result[4] + Micro_4_4_Result[4] + Micro_4_5_Result[4] + Micro_4_6_Result[4])/Total_Micro_4_Score;
+	Total_Micro_4_Delta = (Micro_4_1_Result[5] + Micro_4_2_Result[5] + Micro_4_3_Result[5] + Micro_4_4_Result[5] + Micro_4_5_Result[5] + Micro_4_6_Result[5])/Total_Micro_4_Score;
+	Total_Micro_4_Noise = (Micro_4_1_Result[6] + Micro_4_2_Result[6] + Micro_4_3_Result[6] + Micro_4_4_Result[6] + Micro_4_5_Result[6] + Micro_4_6_Result[6])/Total_Micro_4_Score;
+	Total_Micro_4_SNR = (Micro_4_1_Result[7] + Micro_4_2_Result[7] + Micro_4_3_Result[7] + Micro_4_4_Result[7] + Micro_4_5_Result[7] + Micro_4_6_Result[7])/Total_Micro_4_Score;
+	Total_Micro_4_CNR = (Micro_4_1_Result[8] + Micro_4_2_Result[8] + Micro_4_3_Result[8] + Micro_4_4_Result[8] + Micro_4_5_Result[8] + Micro_4_6_Result[8])/Total_Micro_4_Score;
+	
+	//////////////////////////////////////////////////////////////////
+	//					TOTAL FIBRES SCORE							//
+	//////////////////////////////////////////////////////////////////
+	
+	Total_Fibre_Score = First_Fibre_Result[9] + Second_Fibre_Result[9] + Third_Fibre_Result[9] + Fourth_Fibre_Result[9] + Fifth_Fibre_Result[9] + Sixth_Fibre_Result[9];
+	if(Total_Fibre_Score < 4) Fibre_Test_Result = "Fail";
+	if(Total_Fibre_Score >= 4) Fibre_Test_Result = "Pass";
+	
+	//////////////////////////////////////////////////////////////////
+	//					TOTAL MASSSES SCORE							//
+	//////////////////////////////////////////////////////////////////
+	
+	Total_Mass_Score = First_Mass_Result[9]+Second_Mass_Result[9]+Third_Mass_Result[9]+Fourth_Mass_Result[9]+Fifth_Mass_Result[9];
+	if(Total_Mass_Score < 3) Mass_Test_Result = "Fail";
+	if(Total_Mass_Score >= 3) Mass_Test_Result = "Pass";
+
+	
+	//////////////////////////////////////////////////////////////////
+	//					TOTAL SOECKS GRUOPS SCORE					//
+	//////////////////////////////////////////////////////////////////
+	
+	Total_Micro_Score = (Total_Micro_1_Score/6) + (Total_Micro_2_Score/6) + (Total_Micro_3_Score/6) + (Total_Micro_4_Score/6);
+	if(Total_Micro_Score < 3) Micro_Test_Result = "Fail";
+	if(Total_Micro_Score >= 3) Micro_Test_Result = "Pass";
+	
+	//////////////////////////////////////////////////////////////////
+	//					PRINT OF THE RESULTS						//
+	//////////////////////////////////////////////////////////////////
+	
+	print("ACR Mammography Accreditation Phantom Analysis Results:"+filename);
+	if(extname == ".dcm") //printing of the DICOM informations
+	{
+		print("Images type:\t"+Presentation_Intent_Type);
+		print("Images size:\t"+d2s(nWidth,0)+"\t x\t"+d2s(nHeight,0)+"\t"+d2s(BitStored,0)+"Bit");
+		print("Images date:\t"+ImageDate);
+		print("Images time:\t"+ImageTime);
+		print("Machine Model:\t"+MachineModel);
+		print("Machine Serial Number:\t"+d2s(GiottoSerialNumber,0));
+		print("Detector ID:\t"+DetectorID);
+		print("Pixel Spacing:\t"+pixelSpacing);
+		print("SoftwareVersion:\t"+SoftwareVersion);
+		print("Last Calibration Date:\t"+d2s(LastCalibDate,0));
+		
+		print("\nExposure Value:");
+		print("Exposure Mode\t"+Exp_mode);
+		print("Image Type\t"+Presentation_Intent_Type);
+		print("\nkV\tFilter\tmAs\tESAK\tHVL\tMGD\tExp.Time\tGrid");
+		if (ImageType ==3) print(kV+"\t"+Filter+"\t"+mAs_tot+"\t"+ESAK+"\t"+HVL+"\t"+MGD+"\t"+exp_time+"\t"+Grid);
+		else	print(kV+"\t"+Filter+"\t"+mAs+"\t"+ESAK+"\t"+HVL+"\t"+MGD+"\t"+exp_time+"\t"+Grid);
+	}
+	
+	print("\nFibre\tGround\tSignal\tmm\tContr.\tDelta\tNoise\tSNR\tCNR\tscore");
+	print(First_Fibre_Result[0]+"\t"+d2s(First_Fibre_Result[1],2)+"\t"+d2s(First_Fibre_Result[2],2)+"\t"+d2s(First_Fibre_Result[3],2)+"\t"+d2s(First_Fibre_Result[4],4)+"\t"+d2s(First_Fibre_Result[5],2)+"\t"+d2s(First_Fibre_Result[6],2)+"\t"+d2s(First_Fibre_Result[7],2)+"\t"+d2s(First_Fibre_Result[8],2)+"\t"+d2s(First_Fibre_Result[9],1));
+	print(Second_Fibre_Result[0]+"\t"+d2s(Second_Fibre_Result[1],2)+"\t"+d2s(Second_Fibre_Result[2],2)+"\t"+d2s(Second_Fibre_Result[3],2)+"\t"+d2s(Second_Fibre_Result[4],4)+"\t"+d2s(Second_Fibre_Result[5],2)+"\t"+d2s(Second_Fibre_Result[6],2)+"\t"+d2s(Second_Fibre_Result[7],2)+"\t"+d2s(Second_Fibre_Result[8],2)+"\t"+d2s(Second_Fibre_Result[9],1));
+	print(Third_Fibre_Result[0]+"\t"+d2s(Third_Fibre_Result[1],2)+"\t"+d2s(Third_Fibre_Result[2],2)+"\t"+d2s(Third_Fibre_Result[3],2)+"\t"+d2s(Third_Fibre_Result[4],4)+"\t"+d2s(Third_Fibre_Result[5],2)+"\t"+d2s(Third_Fibre_Result[6],2)+"\t"+d2s(Third_Fibre_Result[7],2)+"\t"+d2s(Third_Fibre_Result[8],2)+"\t"+d2s(Third_Fibre_Result[9],1));
+	print(Fourth_Fibre_Result[0]+"\t"+d2s(Fourth_Fibre_Result[1],2)+"\t"+d2s(Fourth_Fibre_Result[2],2)+"\t"+d2s(Fourth_Fibre_Result[3],2)+"\t"+d2s(Fourth_Fibre_Result[4],4)+"\t"+d2s(Fourth_Fibre_Result[5],2)+"\t"+d2s(Fourth_Fibre_Result[6],2)+"\t"+d2s(Fourth_Fibre_Result[7],2)+"\t"+d2s(Fourth_Fibre_Result[8],2)+"\t"+d2s(Fourth_Fibre_Result[9],1));
+	print(Fifth_Fibre_Result[0]+"\t"+d2s(Fifth_Fibre_Result[1],2)+"\t"+d2s(Fifth_Fibre_Result[2],2)+"\t"+d2s(Fifth_Fibre_Result[3],2)+"\t"+d2s(Fifth_Fibre_Result[4],4)+"\t"+d2s(Fifth_Fibre_Result[5],2)+"\t"+d2s(Fifth_Fibre_Result[6],2)+"\t"+d2s(Fifth_Fibre_Result[7],2)+"\t"+d2s(Fifth_Fibre_Result[8],2)+"\t"+d2s(Fifth_Fibre_Result[9],1));
+	print(Sixth_Fibre_Result[0]+"\t"+d2s(Sixth_Fibre_Result[1],2)+"\t"+d2s(Sixth_Fibre_Result[2],2)+"\t"+d2s(Sixth_Fibre_Result[3],2)+"\t"+d2s(Sixth_Fibre_Result[4],4)+"\t"+d2s(Sixth_Fibre_Result[5],2)+"\t"+d2s(Sixth_Fibre_Result[6],2)+"\t"+d2s(Sixth_Fibre_Result[7],2)+"\t"+d2s(Sixth_Fibre_Result[8],2)+"\t"+d2s(Sixth_Fibre_Result[9],1));
+	
+	print("\nMass\tGround\tSignal\tmm\tContr.\tDelta\tNoise\tSNR\tCNR\tscore");
+	print(First_Mass_Result[0]+"\t"+d2s(First_Mass_Result[1],2)+"\t"+d2s(First_Mass_Result[2],2)+"\t"+d2s(First_Mass_Result[3],2)+"\t"+d2s(First_Mass_Result[4],4)+"\t"+d2s(First_Mass_Result[5],2)+"\t"+d2s(First_Mass_Result[6],2)+"\t"+d2s(First_Mass_Result[7],2)+"\t"+d2s(First_Mass_Result[8],2)+"\t"+d2s(First_Mass_Result[9],1));
+	print(Second_Mass_Result[0]+"\t"+d2s(Second_Mass_Result[1],2)+"\t"+d2s(Second_Mass_Result[2],2)+"\t"+d2s(Second_Mass_Result[3],2)+"\t"+d2s(Second_Mass_Result[4],4)+"\t"+d2s(Second_Mass_Result[5],2)+"\t"+d2s(Second_Mass_Result[6],2)+"\t"+d2s(Second_Mass_Result[7],2)+"\t"+d2s(Second_Mass_Result[8],2)+"\t"+d2s(Second_Mass_Result[9],1));
+	print(Third_Mass_Result[0]+"\t"+d2s(Third_Mass_Result[1],2)+"\t"+d2s(Third_Mass_Result[2],2)+"\t"+d2s(Third_Mass_Result[3],2)+"\t"+d2s(Third_Mass_Result[4],4)+"\t"+d2s(Third_Mass_Result[5],2)+"\t"+d2s(Third_Mass_Result[6],2)+"\t"+d2s(Third_Mass_Result[7],2)+"\t"+d2s(Third_Mass_Result[8],2)+"\t"+d2s(Third_Mass_Result[9],1));
+	print(Fourth_Mass_Result[0]+"\t"+d2s(Fourth_Mass_Result[1],2)+"\t"+d2s(Fourth_Mass_Result[2],2)+"\t"+d2s(Fourth_Mass_Result[3],2)+"\t"+d2s(Fourth_Mass_Result[4],4)+"\t"+d2s(Fourth_Mass_Result[5],2)+"\t"+d2s(Fourth_Mass_Result[6],2)+"\t"+d2s(Fourth_Mass_Result[7],2)+"\t"+d2s(Fourth_Mass_Result[8],2)+"\t"+d2s(Fourth_Mass_Result[9],1));
+	print(Fifth_Mass_Result[0]+"\t"+d2s(Fifth_Mass_Result[1],2)+"\t"+d2s(Fifth_Mass_Result[2],2)+"\t"+d2s(Fifth_Mass_Result[3],2)+"\t"+d2s(Fifth_Mass_Result[4],4)+"\t"+d2s(Fifth_Mass_Result[5],2)+"\t"+d2s(Fifth_Mass_Result[6],2)+"\t"+d2s(Fifth_Mass_Result[7],2)+"\t"+d2s(Fifth_Mass_Result[8],2)+"\t"+d2s(Fifth_Mass_Result[9],1));	
+	
+	print("\nMicro\tGround\tSignal\tmm\tContr.\tDelta\tNoise\tSNR\tCNR\tscore");
+	print("1\t"+d2s(Total_Micro_1_Ground,2)+"\t"+d2s(Total_Micro_1_Signal,2)+"\t"+d2s(Total_Micro_1_Sigma,3)+"\t"+d2s(Total_Micro_1_Contrast,4)+"\t"+d2s(Total_Micro_1_Delta,2)+"\t"+d2s(Total_Micro_1_Noise,2)+"\t"+d2s(Total_Micro_1_SNR,2)+"\t"+d2s(Total_Micro_1_CNR,2)+"\t"+d2s(Total_Micro_1_Score,1));
+	print("2\t"+d2s(Total_Micro_2_Ground,2)+"\t"+d2s(Total_Micro_2_Signal,2)+"\t"+d2s(Total_Micro_2_Sigma,3)+"\t"+d2s(Total_Micro_2_Contrast,4)+"\t"+d2s(Total_Micro_2_Delta,2)+"\t"+d2s(Total_Micro_2_Noise,2)+"\t"+d2s(Total_Micro_2_SNR,2)+"\t"+d2s(Total_Micro_2_CNR,2)+"\t"+d2s(Total_Micro_2_Score,1));
+	print("3\t"+d2s(Total_Micro_3_Ground,2)+"\t"+d2s(Total_Micro_3_Signal,2)+"\t"+d2s(Total_Micro_3_Sigma,3)+"\t"+d2s(Total_Micro_3_Contrast,4)+"\t"+d2s(Total_Micro_3_Delta,2)+"\t"+d2s(Total_Micro_3_Noise,2)+"\t"+d2s(Total_Micro_3_SNR,2)+"\t"+d2s(Total_Micro_3_CNR,2)+"\t"+d2s(Total_Micro_3_Score,1));
+	print("4\t"+d2s(Total_Micro_4_Ground,2)+"\t"+d2s(Total_Micro_4_Signal,2)+"\t"+d2s(Total_Micro_4_Sigma,3)+"\t"+d2s(Total_Micro_4_Contrast,4)+"\t"+d2s(Total_Micro_4_Delta,2)+"\t"+d2s(Total_Micro_4_Noise,2)+"\t"+d2s(Total_Micro_4_SNR,2)+"\t"+d2s(Total_Micro_4_CNR,2)+"\t"+d2s(Total_Micro_4_Score,1));
+	
+	print("\nFibres score:\t"+Total_Fibre_Score+"\tLimit >4"+"\tTest Result\t"+Fibre_Test_Result);
+	print("\Masses score:\t"+Total_Mass_Score+"\tLimit >3"+"\tTest Result\t"+Mass_Test_Result);
+	print("\Micro score:\t"+Total_Micro_Score+"\tLimit >3"+"\tTest Result\t"+Micro_Test_Result);
+	
+	if(First_Fibre_Result[9] == 0) print("\nFirst Fibre not found");
+	if(Second_Fibre_Result[9] == 0) print("\nSecond Fibre not found");
+	if(Third_Fibre_Result[9] == 0) print("\nThird Fibre not found");
+	if(Fourth_Fibre_Result[9] == 0) print("\nFourth Fibre not found");
+	if(Fifth_Fibre_Result[9] == 0) print("\nFifth Fibre not found");
+	if(Sixth_Fibre_Result[9] == 0) print("\nSixth Fibre not found");
+
+	if(First_Mass_Result[9] == 0) print("\nFirst Mass not found");
+	if(Second_Mass_Result[9] == 0) print("\nSecond Mass not found");
+	if(Third_Mass_Result[9] == 0) print("\nThird Mass not found");
+	if(Fourth_Mass_Result[9] == 0) print("\nFourth Mass not found");
+	if(Fifth_Mass_Result[9] == 0) print("\nFifth Mass not found");
+	
+	if(ImageType == 3)
+	{
+		print("SID\t"+SID);
+		print("Distance Source to object surface\t"+Distance_Source_to_patient);
+	}
+	//waitForUser("Total Fibre"+Total_Fibre_Score+"\n Total Masses"+Total_Mass_Score+"\n Total Specks Gruops"+Total_Micro_Score);
+	if(extname == ".dcm" && ImageType == 3) //TOMO RECO
+	{
+		selectWindow("Log");
+		saveAs("Text", myDir+"ACR_Phantom_18-220_Analysis_Result_TOMO_RECO"+filename);
+		selectWindow("Log");
+		run("Close");
+	}
+	if(extname == ".dcm" && ImageType == 1) //MAMMO
+	{
+		selectWindow("Log");
+		saveAs("Text", myDir+"ACR_Phantom_18-220_Analysis_Result_MAMMO"+filename);
+		selectWindow("Log");
+		run("Close");
+	}
+	if ((extname == ".raw") || (extname == ".dat"))
+	{
+		selectWindow("Log");
+		saveAs("Text", myDir+"ACR Phantom Analysis Result"+filename);
+		selectWindow("Log");
+		run("Close");
+	}
+	//Save of the ROIset
+	roiManager("Save", myDir+"RoiSet_"+filename+".zip");
+	roiManager("Reset");
+	selectWindow("ROI Manager");
+	run("Close");
+	run("Close All");
+}
+	//////////////////////////////////////////////////////////////////////////////
+	//					FUNCTION FOR FIBRES ANALYSIS							//
+	//////////////////////////////////////////////////////////////////////////////
+	
+	function fibre_profile_analysis (Fibre_number,X_Start,Y_Start,ROIdim,fibre_line_width,sigma_min,sigma_max,fibre_angle,ROI_Noise_width)
+	{
+		
+		selectWindow(filename);
+
+		makeRectangle(X_Start, Y_Start, ROIdim, ROIdim);
+		run("Enhance Contrast", "saturated=0.35");
+		roiManager("Add");
+		roiManager("Select", roiManager("count")-1);
+		roiManager("Rename", "ROI Fibre_"+Fibre_number);
+		
+		if(fibre_angle == 45) makeLine(X_Start, Y_Start, X_Start+ROIdim, Y_Start+ROIdim,fibre_line_width);
+		if(fibre_angle == -45) makeLine(X_Start, Y_Start+ROIdim, X_Start+ROIdim, Y_Start,fibre_line_width);
+		roiManager("Add");
+		roiManager("Select", roiManager("count")-1);
+		roiManager("Rename", "Fibre"+Fibre_number+"_Profile");
+		Fiber = getProfile();
+		x = newArray(Fiber.length);
+		
+		for(i=0; i<Fiber.length; i++)
+		{
+			x[i] = i;
+			if(ImageType == 1) Fiber[i] = (2^BitStored -1) - Fiber[i];
+		}
+
+		//Flat-Field correction
+		Fit.doFit("straight line", x, Fiber);
+		m = Fit.p(1);
+		q = Fit.p(0);
+
+		Fiber_flat = newArray(Fiber.length);
+		
+		for(i=0; i<Fiber_flat.length; i++)
+		{
+			Fiber_flat[i]= Fiber[i]- x[i]*m;
+		}
+
+		//Gaussian Fit
+		fiber_found = 0;
+		slice = 0.5*Fiber_flat.length-1;
+		slice_max = 5;
+		while( (fiber_found == 0) && (slice > slice_max))
+		{
+			Fiber_flat_forFit = Array.slice(Fiber_flat,0.5*Fiber_flat.length-slice, 0.5*Fiber_flat.length+slice);
+			x_forFit = Array.slice(x,0.5*x.length-slice, 0.5*x.length+slice);
+
+			Fit.doFit("gaussian", x_forFit, Fiber_flat_forFit);
+			if(ImageType == 1)
+			{
+			Ground = (2^BitStored -1) - Fit.p(0);
+			Signal = (2^BitStored -1) - Fit.p(1);
+			}
+			if(ImageType == 3)
+			{
+				Ground = Fit.p(0);
+				Signal = Fit.p(1);
+			}
+			mu = Fit.p(2);
+			sigma = Fit.p(3);
+			R_square = Fit.rSquared;
+			if (dbg_val ==1)
+			{
+				Fit.plot;
+				rename("Fibre"+Fibre_number+"_Profile");
+			}
+			if(((sigma < sigma_min) || (sigma > sigma_max)) || (R_square <= 0.3) || ((mu < 0.5*x_forFit.length -50) || (mu > 0.5*x_forFit.length +50)))
+			{
+				fiber_found = 0;
+				dialog = "not found";
+				slice--;
+			}
+			else
+			{
+				fiber_found = 1;
+				dialog = "found";
+				if (dbg_val ==1) waitForUser("Fibre_"+Fibre_number+" "+dialog);
+			}
+			if (dbg_val == 1)
+			{
+				selectWindow("Fibre"+Fibre_number+"_Profile");
+				run("Close");
+			}
+		}
+		if (dbg_val ==1 && fiber_found == 0) waitForUser("Fibre_"+Fibre_number+" "+dialog);
+		Gaussian_Fit_Profile = newArray(Fiber_flat_forFit.length);
+		if(dbg_val == 1) 
+		{
+			for(i=0; i<Fiber_flat_forFit.length; i++)
+			{
+				Gaussian_Fit_Profile[i] = ((2^BitStored -1)-Ground)+(((2^BitStored -1)-Signal)-((2^BitStored -1)-Ground))*exp(-(x[i]-mu)*(x[i]-mu)/(2*sigma*sigma));
+				print(x[i]+"\t"+Fiber[i]+"\t"+Fiber_flat_forFit[i]+"\t"+Gaussian_Fit_Profile[i]);
+			}
+			selectWindow("Log");
+			saveAs("Text", myDir+"Fibre"+Fibre_number+"_Profiles"+filename);
+			selectWindow("Log");
+			run("Close");
+		}
+		//Fibre Result
+		Contrast =  abs((Signal-Ground)/Ground);
+		Delta = abs((Ground-Signal));
+		selectWindow(filename);
+		
+		//NOISE EVALUATION
+		
+		//ROI1 left with respect to the fibre
+		if(fibre_angle == 45)
+		{
+			X1 = X_Start +(fibre_line_width/2)*(sqrt(2)/2);
+			X2 = X1 + ROI_Noise_width*(sqrt(2)/2);
+			X3 = X2 - fibre_line_width*(sqrt(2)/2);
+			X4 = X3 - ROI_Noise_width*(sqrt(2)/2);
+			
+			Y1 = Y_Start -(fibre_line_width/2)*(sqrt(2)/2);
+			Y2 = Y1 + (ROI_Noise_width)*(sqrt(2)/2);
+			Y3 = Y2 + fibre_line_width*(sqrt(2)/2);
+			Y4 = Y3 - ROI_Noise_width*(sqrt(2)/2);
+		}
+		if(fibre_angle == -45)
+		{
+			X1 = (X_Start+ROIdim) - (fibre_line_width/2)*(sqrt(2)/2);
+			X2 = X1 + fibre_line_width*(sqrt(2)/2);
+			X3 = X2 - ROI_Noise_width*(sqrt(2)/2);
+			X4 = X3 - fibre_line_width*(sqrt(2)/2);
+			
+			Y1 = Y_Start - (fibre_line_width/2)*(sqrt(2)/2);
+			Y2 = Y1 + fibre_line_width*(sqrt(2)/2);
+			Y3 = Y2 + ROI_Noise_width*(sqrt(2)/2);
+			Y4 = Y3 - fibre_line_width*(sqrt(2)/2);
+		}
+		makeSelection("polygon", newArray(X1,X2,X3,X4), newArray(Y1,Y2,Y3,Y4));
+		roiManager("Add");
+		roiManager("Select", roiManager("count")-1);
+		roiManager("Rename", "Fibre"+Fibre_number+"_Noise ROI 1");
+
+		run("Enhance Contrast", "saturated=0.35");
+		getRawStatistics(area, mean, min, max, std, histogram);
+		GreyLevel_1 = mean;
+		Noise_1 = std;
+		
+		//ROI2 right with respect to the fibre 
+		if(fibre_angle == 45)
+		{
+			X1 = (X_Start + ROIdim)+(fibre_line_width/2)*(sqrt(2)/2);
+			X2 = X1 - ROI_Noise_width*(sqrt(2)/2);
+			X3 = X2 - fibre_line_width*(sqrt(2)/2);
+			X4 = X3 + ROI_Noise_width*(sqrt(2)/2);
+			
+			Y1 = (Y_Start + ROIdim)-(fibre_line_width/2)*(sqrt(2)/2);
+			Y2 = Y1 - (ROI_Noise_width)*(sqrt(2)/2);
+			Y3 = Y2 + fibre_line_width*(sqrt(2)/2);
+			Y4 = Y3 + ROI_Noise_width*(sqrt(2)/2);
+		}
+		if(fibre_angle == -45)
+		{
+			X1 = X_Start -(fibre_line_width/2)*(sqrt(2)/2);
+			X2 = X1 + ROI_Noise_width*(sqrt(2)/2);
+			X3 = X2 + fibre_line_width*(sqrt(2)/2);
+			X4 = X3 - ROI_Noise_width*(sqrt(2)/2);
+			
+			Y1 = (Y_Start + ROIdim)-(fibre_line_width/2)*(sqrt(2)/2);
+			Y2 = Y1 - (ROI_Noise_width)*(sqrt(2)/2);
+			Y3 = Y2 + fibre_line_width*(sqrt(2)/2);
+			Y4 = Y3 + ROI_Noise_width*(sqrt(2)/2);
+		}
+		makeSelection("polygon", newArray(X1,X2,X3,X4), newArray(Y1,Y2,Y3,Y4));
+		roiManager("Add");
+		roiManager("Select", roiManager("count")-1);
+		roiManager("Rename", "Fibre"+Fibre_number+"_Noise ROI 2");
+
+		run("Enhance Contrast", "saturated=0.35");
+		getRawStatistics(area, mean, min, max, std, histogram);
+		GreyLevel_2 = mean;
+		Noise_2 = std;
+		
+		GreyLevel = (GreyLevel_1 + GreyLevel_2)/2;
+		Noise = (Noise_1+Noise_2)/2;
+		SNR = Ground/Noise;
+		CNR = Delta/Noise;
+		
+		//if(dbg_val == 1) waitForUser("Fibre_"+Fibre_number+" "+dialog+"\nGround: \t"+d2s(Ground,1)+"\nSignal: \t"+d2s(Signal,1)+"\nsigma: \t"+d2s(sigma,2)+"\nContrast: \t"+d2s(Contrast,4)+"\nDelta: \t"+d2s(Delta,1)+"\nNoise: \t"+d2s(Noise,2)+"\nSNR: \t"+d2s(SNR,2)+"\nCNR: \t"+d2s(CNR,2));
+
+		//Fibre Score
+		
+		CNR_acceptance = 0.25; //experimental threshold of visibility
+		CNR_achievable = 0.40;
+		
+		if(fiber_found == 0) 
+		{
+			Fibre_score = 0;
+		}
+		else if(fiber_found == 1)
+		{
+			if(CNR < CNR_acceptance)
+			{
+				Fibre_score = 0;
+			}
+			if((CNR >= CNR_acceptance) || (CNR < CNR_achievable))
+			{
+				Fibre_score = 0.5;
+			}
+			if(CNR >= CNR_achievable)
+			{
+				Fibre_score = 1;
+			}
+		}
+		
+		//STORAGE OF RESULTS
+		
+		Result = newArray(10);
+		
+		if(fiber_found == 1)
+		{
+			scale = (2*sqrt(2*log(2)))*X_factor;
+			Result[0] = Fibre_number;
+			Result[1] = Ground;
+			Result[2] = Signal;
+			Result[3] = sigma*3*X_factor;
+			Result[4] = Contrast;
+			Result[5] = Delta;
+			Result[6] = Noise;
+			Result[7] = SNR;
+			Result[8] = CNR;
+			Result[9] = Fibre_score;
+		}
+		if(fiber_found == 0)
+		{
+			Result[0] = Fibre_number;
+			Result[1] = GreyLevel;
+			Result[2] = 0;
+			Result[3] = 0;
+			Result[4] = 0;
+			Result[5] = 0;
+			Result[6] = Noise;
+			Result[7] = GreyLevel/Noise;
+			Result[8] = 0;
+			Result[9] = fiber_found;
+		}
+		
+
+		//Print of Results for single fibre
+		if(dbg_val ==1)
+		{
+			//print("Fibre\tGround\tSignal\twidth(mm)\tContr.\tDelta\tNoise\tSNR\tCNR\tscore");
+			if(extname == ".dcm")print(Result[0]+"\t"+ImageDate+"\t"+ImageTime+"\t"+Filter+"\t"+kV+"\t"+mAs+"\t"+d2s(Result[1],2)+"\t"+d2s(Result[2],2)+"\t"+d2s(Result[3],2)+"\t"+d2s(Result[4],4)+"\t"+d2s(Result[5],2)+"\t"+d2s(Result[6],2)+"\t"+d2s(Result[7],2)+"\t"+d2s(Result[8],2)+"\t"+d2s(Result[9],0));
+			if ((extname == ".raw") || (extname == ".dat"))print(Result[0]+"\t"+d2s(Result[1],2)+"\t"+d2s(Result[2],2)+"\t"+d2s(Result[3],2)+"\t"+d2s(Result[4],4)+"\t"+d2s(Result[5],2)+"\t"+d2s(Result[6],2)+"\t"+d2s(Result[7],2)+"\t"+d2s(Result[8],2)+"\t"+d2s(Result[9],0));
+			selectWindow("Log");
+			if(extname == ".dcm")saveAs("Text", myDir+"Fibre_"+Fibre_number+"_Result"+"_"+kV+"kV"+mAs+"mAs"+Filter+Presentation_Intent_Type+ImageDate+"date"+ImageTime+"time");
+			if ((extname == ".raw") || (extname == ".dat"))saveAs("Text", myDir+"Fibre_"+Fibre_number+"_Profile_Result"+filename);
+			selectWindow("Log");
+			run("Close");
+		}
+		//Save the jpeg image of the fibre
+		if(dbg_val ==1)
+		{
+			makeRectangle(X_Start, Y_Start, ROIdim, ROIdim);
+			run("Copy");
+			newImage("Fibre"+Fibre_number, "16-bit White", ROIdim, ROIdim, 1);
+			run("Paste");
+			run("Enhance Contrast", "saturated=0.35");
+			selectWindow("Fibre"+Fibre_number);
+			run("Input/Output...", "jpeg=100 gif=-1 file=.txt use_file save copy_row save_column save_row");
+			if(extname == ".dcm")  saveAs("Jpeg", myDir+"Fibre"+Fibre_number+"_"+kV+"kV"+mAs+"mAs"+Filter+Presentation_Intent_Type+ImageDate+"date"+ImageTime+"time");
+			if ((extname == ".raw") || (extname == ".dat")) saveAs("Jpeg", myDir+"First_Fibre"+filename);
+			selectWindow("Fibre"+Fibre_number);
+			run("Close");
+		}
+		return Result;
+	}
+	
+	
+	//////////////////////////////////////////////////////////////////////////////
+	//					FUNCTION FOR MASSES ANALYSIS							//
+	//////////////////////////////////////////////////////////////////////////////
+	
+	function mass_analysis(Mass_number,X_Start,Y_Start,ROIdim,l_mass)
+	{
+		selectWindow(filename);
+		
+
+		makeRectangle(X_Start,Y_Start, ROIdim, ROIdim);
+		run("Enhance Contrast", "saturated=0.35");
+		roiManager("Add");
+		roiManager("Select", roiManager("count")-1);
+		roiManager("Rename", "ROI Mass"+Mass_number);
+		
+		x_centre = X_Start + 0.5*ROIdim;
+		y_centre = Y_Start + 0.5*ROIdim;
+		
+		//Radial Profile of the mass
+		num_Porfiles = 6;
+		teta = 0;
+		delta_teta = PI/num_Porfiles;
+		nProfile_used = 0;
+		while(teta<PI-PI/num_Porfiles)
+		{
+			selectWindow(filename);
+			run("Line Width...", "line=10");
+			makeLine(x_centre-l_mass*cos(teta), y_centre-l_mass*sin(teta), x_centre+l_mass*cos(teta), y_centre+l_mass*sin(teta));
+			roiManager("Add");
+			roiManager("Select", roiManager("count")-1);
+			roiManager("Rename", "Mass"+Mass_number+"_Profile"+teta*(180/PI));
+			
+			Mass_Profile = getProfile();
+			x = newArray(Mass_Profile.length);
+			
+			//Inversion
+			for(i=0; i<Mass_Profile.length; i++)
+			{
+				x[i] = i;
+				if(ImageType == 1) Mass_Profile[i] = (2^BitStored -1) - Mass_Profile[i];
+				if(ImageType == 3) Mass_Profile[i] = Mass_Profile[i];
+			}
+			
+			//Flat-Field correction
+			Fit.doFit("straight line", x, Mass_Profile);
+			m = Fit.p(1);
+			q = Fit.p(0);
+
+			Mass_Profile_flat = newArray(Mass_Profile.length);
+			for(i=0; i<Mass_Profile_flat.length; i++)
+			{
+				Mass_Profile_flat[i]= Mass_Profile[i]- x[i]*m;
+			}
+			
+			//Gaussian Fit Fourth Fibre
+			Fit.doFit("gaussian", x, Mass_Profile_flat);
+			if(ImageType == 1)
+			{
+				a = (2^BitStored -1)-Fit.p(0);
+				b = (2^BitStored -1)-Fit.p(1);
+			}
+			if(ImageType == 3)
+			{
+				a = Fit.p(0);
+				b = Fit.p(1);
+			}
+			c = Fit.p(2);
+			d = abs(Fit.p(3));
+			R2 = Fit.rSquared;
+			if (dbg_val ==1)
+			{
+				Fit.plot;
+				rename("Profile Mass"+Mass_number);
+			}
+			if(Fit.rSquared > 0.3)
+			{
+				Ground_Mass += a;
+				Signal_Mass += b;
+				mu_Mass += c;
+				sigma_Mass += d;
+				Rsquare_Mass += R2;
+				nProfile_used++;
+			}
+			if (dbg_val ==1) 
+			{
+				waitForUser("Check Mass Profile");
+				selectWindow("Profile Mass"+Mass_number);
+				run("Close");
+			}
+			teta = teta+(delta_teta);
+		}
+
+		//Average Gaussian
+		Ground_Mass = Ground_Mass/nProfile_used;
+		Signal_Mass = Signal_Mass/nProfile_used;
+		mu_Mass = mu_Mass/nProfile_used;
+		sigma_Mass = sigma_Mass/nProfile_used;
+		Rsquare_Mass = Rsquare_Mass/nProfile_used;
+		
+		//Noise Evaluation
+		selectWindow(filename);
+		if(sigma_Mass < 50)
+		{
+			makeOval(x_centre-1.5*sigma_Mass, y_centre-1.5*sigma_Mass, 3*sigma_Mass, 3*sigma_Mass);
+			run("Make Band...", "band="+sigma_Mass*X_factor);
+		}
+		else
+		{
+			makeOval(x_centre-25, y_centre-25, 2*25, 2*25);
+			run("Make Band...", "band=2");
+		}
+		roiManager("Add");
+		roiManager("Select", roiManager("count")-1);
+		roiManager("Rename", "ROI Mass"+Mass_number);
+		getRawStatistics(area, mean, min, max, std);
+		Average_Mass = mean;
+		Noise_Mass = std;
+		
+		//Mass Result
+		Contrast_Mass = abs((Signal_Mass-Ground_Mass)/Ground_Mass);
+		SNR_Mass = Signal_Mass/Noise_Mass;
+		Delta_Mass =  abs((Ground_Mass - Signal_Mass));
+		CNR_Mass = Delta_Mass/Noise_Mass;
+		
+		CNR_acceptance_mass = 0.5; //experimental threshold of visibility
+		CNR_achievable_mass = 1;
+		
+		if(Rsquare_Mass >= 0.2 && CNR_Mass > CNR_acceptance_mass)
+		{
+			Mass_found = 1;
+			dialog = "found";
+		}
+		else
+		{
+			Mass_found = 0;
+			dialog = "not found";
+		}
+		if (dbg_val ==1) waitForUser("Mass_"+Mass_number+" "+dialog);
+		
+		//Mass Score
+
+		if((Mass_found == 0) || (CNR_Mass < CNR_acceptance_mass)) 
+		{
+			Mass_score = 0;
+		}
+		else
+		{
+			if((CNR_Mass >= CNR_acceptance_mass) || (CNR_Mass < CNR_achievable_mass))
+			{
+				Mass_score = 0.5;
+			}
+			if(CNR_Mass >= CNR_achievable_mass)
+			{
+				Mass_score = 1;
+			}
+		}
+		
+		//STORAGE OF RESULTS
+		if (Mass_found ==1)
+		{
+			scale = (2*sqrt(2*log(2)))*X_factor;
+			Result = newArray(10);
+			Result[0] = Mass_number;
+			Result[1] = Ground_Mass;
+			Result[2] = Signal_Mass;
+			Result[3] = sigma_Mass*3*X_factor;
+			Result[4] = Contrast_Mass;
+			Result[5] = Delta_Mass;
+			Result[6] = Noise_Mass;
+			Result[7] = SNR_Mass;
+			Result[8] = CNR_Mass;
+			Result[9] = Mass_score;
+		}
+		if (Mass_found ==0)
+		{
+			Result = newArray(10);
+			Result[0] = Mass_number;
+			Result[1] = Average_Mass;
+			Result[2] = 0;
+			Result[3] = 0;
+			Result[4] = Contrast_Mass;
+			Result[5] = 0;
+			Result[6] = Noise_Mass;
+			Result[7] = Average_Mass/Noise_Mass;
+			Result[8] = CNR_Mass;
+			Result[9] = Mass_score;
+		}
+		//Print of Results for single mass
+		if(dbg_val ==1)
+		{
+		//print("Mass\tGround\tSignal\tsigma(pixel)\tContrast\ttDelta\tNoise\SNR\tCNR\tscore");
+			if(extname == ".dcm")print(Result[0]+"\t"+ImageDate+"\t"+ImageTime+"\t"+Filter+"\t"+kV+"\t"+mAs+"\t"+d2s(Result[1],2)+"\t"+d2s(Result[2],2)+"\t"+d2s(Result[3],2)+"\t"+d2s(Result[4],4)+"\t"+d2s(Result[5],2)+"\t"+d2s(Result[6],2)+"\t"+d2s(Result[7],2)+"\t"+d2s(Result[8],2)+"\t"+d2s(Result[9],1));
+			if ((extname == ".raw") || (extname == ".dat"))print(Result[0]+"\t"+"\t"+d2s(Result[1],2)+"\t"+d2s(Result[2],2)+"\t"+d2s(Result[3],2)+"\t"+d2s(Result[4],4)+"\t"+d2s(Result[5],2)+"\t"+d2s(Result[6],2)+"\t"+d2s(Result[7],2)+"\t"+d2s(Result[8],2)+"\t"+d2s(Result[9],1));
+			selectWindow("Log");
+			if(extname == ".dcm")saveAs("Text", myDir+"Mass_"+Mass_number+"_Result"+"_"+kV+"kV"+mAs+"mAs"+Filter+Presentation_Intent_Type+ImageDate+"date"+ImageTime+"time");
+			if ((extname == ".raw") || (extname == ".dat"))saveAs("Text", myDir+"Mass"+Mass_number+"_Profile_Result"+filename);
+			selectWindow("Log");
+			run("Close");
+		}
+		return Result;
+	}
+	
+	//////////////////////////////////////////////////////////////////////////////
+	//					FUNCTION FOR MICRO ANALYSIS							//
+	//////////////////////////////////////////////////////////////////////////////
+	
+	function micro_analysis(Micro_number,X_Start,Y_Start,ROIdim,sigma_min,sigma_max,l_micro,width_micro_profile)
+	{
+		selectWindow(filename);
+
+		makeRectangle(X_Start,Y_Start, ROIdim, ROIdim);
+		getRawStatistics(area, mean, min, max, std);
+		ROI_mean = mean;
+		ROI_min = min;
+		run("Enhance Contrast", "saturated=0.35");
+		roiManager("Add");
+		roiManager("Select", roiManager("count")-1);
+		roiManager("Rename", "ROI Micro"+Micro_number);
+		
+		//Minimum value inside micro detection for mammo images
+		if (ImageType == 1)
+		{
+			min = ROI_mean;
+			for(i = X_Start; i < X_Start+ROIdim; i++)
+			{
+				for(j = Y_Start; j < Y_Start+ROIdim; j++)
+				{
+					pixel_value = getPixel(i,j);
+					if(pixel_value < min)
+					{
+						min = pixel_value;
+						x_centre = i;
+						y_centre = j;
+					}
+				}
+			}
+		}
+		//Max value inside micro detection for reco images
+		if (ImageType == 3)
+		{
+			max = ROI_mean;
+			for(i = X_Start; i < X_Start+ROIdim; i++)
+			{
+				for(j = Y_Start; j < Y_Start+ROIdim; j++)
+				{
+					pixel_value = getPixel(i,j);
+					if(pixel_value > max)
+					{
+						max = pixel_value;
+						x_centre = i;
+						y_centre = j;
+					}
+				}
+			}
+		}
+		//Radial Profile of the micro
+		teta = 0;
+		num_Porfiles = 20;
+		delta_teta = PI/num_Porfiles;
+		nProfile_used = 0;
+		Micro_Profile_flat = newArray(2*l_micro);
+		while(teta<(PI-PI/num_Porfiles))
+		{
+			selectWindow(filename);
+			run("Line Width...", "line=10");
+			makeLine(x_centre-l_micro*cos(teta), y_centre-l_micro*sin(teta), x_centre+l_micro*cos(teta), y_centre+l_micro*sin(teta),width_micro_profile);
+			roiManager("Add");
+			roiManager("Select", roiManager("count")-1);
+			roiManager("Rename", "Micro"+Micro_number+"_Profile"+teta*(180/PI));
+			
+			Micro_Profile = getProfile();
+			x = newArray(Micro_Profile.length);
+			
+			//Inversion
+			for(i=0; i<Micro_Profile.length; i++)
+			{
+				x[i] = i;
+				if(ImageType == 1) Micro_Profile[i] = (2^BitStored -1) - Micro_Profile[i];
+				if(ImageType == 3) Micro_Profile[i] = Micro_Profile[i];
+			}
+			
+			//Flat-Field correction
+			Fit.doFit("straight line", x, Micro_Profile);
+			m = Fit.p(1);
+			q = Fit.p(0);
+			
+			for(i=0; i<Micro_Profile_flat.length; i++)
+			{
+				Micro_Profile_flat[i]+= (Micro_Profile[i]- x[i]*m);
+				
+			}
+			teta = teta+(delta_teta);
+		}	
+		for(i=0; i<Micro_Profile_flat.length; i++)
+		{
+			Micro_Profile_flat[i] /= (num_Porfiles -1);
+		}
+		//Gaussian Fit
+		micro_found = 0;
+		slice = 0.5*Micro_Profile_flat.length-1;
+		slice_max = 5;
+		step = 0;
+		while( (micro_found == 0) && (slice > slice_max))
+		{
+			Micro_flat_forFit = Array.slice(Micro_Profile_flat,0.5*Micro_Profile_flat.length-slice, 0.5*Micro_Profile_flat.length+slice);
+			x_forFit = Array.slice(x,0.5*x.length-slice, 0.5*x.length+slice);
+			
+			Fit.doFit("gaussian", x_forFit, Micro_flat_forFit);
+			if(ImageType == 1)
+			{
+				a = (2^BitStored -1)-Fit.p(0);
+				b = (2^BitStored -1)-Fit.p(1);
+			}
+			if(ImageType == 3)
+			{
+				a = Fit.p(0);
+				b = Fit.p(1);
+			}
+			c = Fit.p(2);
+			d = abs(Fit.p(3));
+			R2 = Fit.rSquared;
+
+			if (dbg_val ==1)
+			{
+				Fit.plot;
+				rename("Micro"+Micro_number+"_Profile");
+			}
+			if(((d < sigma_min) || (d > sigma_max)) || (R2 <= 0.3) || ((c < 0.5*x_forFit.length -20) || (c > 0.5*x_forFit.length +20)))
+			{
+				micro_found = 0;
+				dialog = "not found";
+				slice--;
+				step++;
+			}
+			else
+			{
+				micro_found = 1;
+				dialog = "found";
+			}
+			if (dbg_val ==1 )
+			{
+				if(micro_found == 1) waitForUser("Micro_"+Micro_number+" "+dialog+" Teta"+teta+" Step"+(step+1));
+				selectWindow("Micro"+Micro_number+"_Profile");
+				run("Close");
+			}
+		}
+
+		Ground_Micro = a;
+		Signal_Micro = b;
+		mu_Micro = c;
+		sigma_Micro = d;
+		Rsquare_Micro = R2;
+
+
+	
+		//Noise Evaluation
+		ROI_Noise = 20;
+		selectWindow(filename);
+		if(micro_found != 0)
+		{
+			makeOval(x_centre-2.5*sigma_Micro, y_centre-2.5*sigma_Micro, 5*sigma_Micro, 5*sigma_Micro);
+			run("Make Band...", "band="+ROI_Noise*X_factor);
+			
+			roiManager("Add");
+			roiManager("Select", roiManager("count")-1);
+			roiManager("Rename", "ROI Noise Micro"+Micro_number);
+			getRawStatistics(area, mean, min, max, std);
+			
+			Average_Micro = mean;
+			Noise_Micro = std;
+		}
+		else
+		{
+			ROI_Noise = 20;
+			selectWindow(filename);
+			offset = 10;
+
+			makeRectangle(x_centre - 0.5*ROI_Noise, y_centre - ROI_Noise - offset, ROI_Noise, ROI_Noise);
+			roiManager("Add");
+			roiManager("Select", roiManager("count")-1);
+			roiManager("Rename", "ROI Noise 1 Micro"+Micro_number);
+			getRawStatistics(area, mean, min, max, std);
+			Average_Micro += mean;
+			Noise_Micro += std;
+			
+			makeRectangle(x_centre + offset, y_centre - 0.5*ROI_Noise, ROI_Noise, ROI_Noise);
+			roiManager("Add");
+			roiManager("Select", roiManager("count")-1);
+			roiManager("Rename", "ROI Noise 1 Micro"+Micro_number);
+			getRawStatistics(area, mean, min, max, std);
+			Average_Micro += mean;
+			Noise_Micro += std;
+			
+			makeRectangle(x_centre - 0.5*ROI_Noise, y_centre + offset, ROI_Noise, ROI_Noise);
+			roiManager("Add");
+			roiManager("Select", roiManager("count")-1);
+			roiManager("Rename", "ROI Noise 1 Micro"+Micro_number);
+			getRawStatistics(area, mean, min, max, std);
+			Average_Micro += mean;
+			Noise_Micro += std;
+			
+			makeRectangle(x_centre - offset - ROI_Noise, y_centre - 0.5*ROI_Noise, ROI_Noise, ROI_Noise);
+			roiManager("Add");
+			roiManager("Select", roiManager("count")-1);
+			roiManager("Rename", "ROI Noise 1 Micro"+Micro_number);
+			getRawStatistics(area, mean, min, max, std);
+			Average_Micro += mean;
+			Noise_Micro += std;
+			
+			Average_Micro = Average_Micro/4;
+			Noise_Micro = Noise_Micro/4;
+		}
+		
+		//Micro Result
+		Contrast_Micro = abs((Signal_Micro-Ground_Micro)/Ground_Micro);
+		SNR_Micro = Signal_Micro/Noise_Micro;
+		Delta_Micro = abs((Ground_Micro - Signal_Micro));
+		CNR_Micro = Delta_Micro/Noise_Micro;
+		
+		//if(dbg_val == 1) waitForUser("Micro_"+Micro_number+"  "+dialog+"\nGround \t "+d2s(Ground_Micro,1)+"\nSignal \t "+d2s(Signal_Micro,1)+"\nsigma \t "+d2s(sigma_Micro,2)+"\nR2 \t "+d2s(Rsquare_Micro,3)+"\nContrast\t"+d2s(Contrast_Micro,3)+"\nSNR \t"+d2s(SNR_Micro,1)+"\nDelta \t"+d2s(Delta_Micro,1)+"\nNoise \t"+d2s(Noise_Micro,2)+"\nCNR \t"+d2s(CNR_Micro,1));
+		
+		//Micro Score
+	
+		if((micro_found == 0)) 
+		{
+			Micro_score = 0;
+			scale = (2*sqrt(2*log(2)))*X_factor;
+			Result = newArray(10);
+			Result[0] = Micro_number;
+			Result[1] = Ground_Micro;
+			Result[2] = Signal_Micro;
+			Result[3] = sigma_Micro*3*X_factor;
+			Result[4] = Contrast_Micro;
+			Result[5] = Delta_Micro;
+			Result[6] = Noise_Micro;
+			Result[7] = SNR_Micro;
+			Result[8] = CNR_Micro;
+			Result[9] = Micro_score;
+		}
+		else if((micro_found == 1)) 
+		{
+			Micro_score = 1;
+			
+			//STORAGE OF RESULTS
+			scale = (2*sqrt(2*log(2)))*X_factor;
+			Result = newArray(10);
+			Result[0] = Micro_number;
+			Result[1] = Ground_Micro;
+			Result[2] = Signal_Micro;
+			Result[3] = sigma_Micro*3*X_factor;
+			Result[4] = Contrast_Micro;
+			Result[5] = Delta_Micro;
+			Result[6] = Noise_Micro;
+			Result[7] = SNR_Micro;
+			Result[8] = CNR_Micro;
+			Result[9] = Micro_score;
+		}
+		
+		//Print of Results for single micro
+		//print("Micro\tGround\tSignal\ts(pixel)\tContrast\tDelta\tNoise\tSNR\tCNR\tscore");
+		if(dbg_val ==1)
+		{
+			if(extname == ".dcm")print(Result[0]+"\t"+ImageDate+"\t"+ImageTime+"\t"+Filter+"\t"+kV+"\t"+mAs+"\t"+d2s(Result[1],2)+"\t"+d2s(Result[2],2)+"\t"+d2s(Result[3],2)+"\t"+d2s(Result[4],4)+"\t"+d2s(Result[5],2)+"\t"+d2s(Result[6],2)+"\t"+d2s(Result[7],2)+"\t"+d2s(Result[8],2)+"\t"+d2s(Result[9],1));
+			if ((extname == ".raw") || (extname == ".dat"))print(Result[0]+"\t"+d2s(Result[1],2)+"\t"+d2s(Result[2],2)+"\t"+d2s(Result[3],2)+"\t"+d2s(Result[4],4)+"\t"+d2s(Result[5],2)+"\t"+d2s(Result[6],2)+"\t"+d2s(Result[7],2)+"\t"+d2s(Result[8],2)+"\t"+d2s(Result[9],1));
+			selectWindow("Log");
+			if(extname == ".dcm")saveAs("Text", myDir+"Micro_"+Micro_number+"_Profile_Result"+"_"+kV+"kV"+mAs+"mAs"+Filter+Presentation_Intent_Type+ImageDate+"date"+ImageTime+"time");
+			if ((extname == ".raw") || (extname == ".dat"))saveAs("Text", myDir+"Micro"+Micro_number+"_Result"+filename);
+			selectWindow("Log");
+			run("Close");
+		}
+		return Result;
+	}
+
+	//Get DICOM INFO
+function getNumericTag(tag) 
+{
+    value = getTag(tag);
+    if (value=="") return NaN;
+    index3 = indexOf(value, "\\");
+    if (index3>0) value = substring(value, 0, index3);
+    value = 0 + value; // convert to number
+    return value;
+ }
+
+function getTag(tag) 
+{
+      info = getImageInfo();
+      index1 = indexOf(info, tag);
+      if (index1==-1) return "";
+      index1 = indexOf(info, ":", index1);
+      if (index1==-1) return "";
+      index2 = indexOf(info, "\n", index1);
+      value = substring(info, index1+1, index2);
+      return value;
+}
